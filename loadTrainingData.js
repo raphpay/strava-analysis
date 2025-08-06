@@ -54,8 +54,7 @@ function estimateTSS(durationMin, hrAvg) {
 }
 
 // === 3. Load activities from Strava ===
-async function fetchActivities() {
-  const accessToken = await getAccessToken();
+async function fetchActivities(accessToken) {
   const activities = [];
 
   let page = 1;
@@ -182,10 +181,142 @@ function computeLoadTimeline(tssMap) {
   return timeline;
 }
 
+async function getHeartRateStream(activityId, accessToken) {
+  const res = await fetch(
+    `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=heartrate&key_by_type=true`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!res.ok) {
+    console.warn(`⚠️ Pas de données cardio pour l'activité ${activityId}`);
+    return null;
+  }
+
+  const data = await res.json();
+  return data.heartrate?.data || null;
+}
+
+function computeChargeRecovery(timeline, days) {
+  const recent = timeline.slice(-days);
+
+  const chargeDays = recent.filter((d) => d.tss > 50).length;
+  const recoveryDays = recent.filter((d) => d.tss < 20).length;
+
+  const ratio = recoveryDays === 0 ? chargeDays : chargeDays / recoveryDays;
+
+  return {
+    days,
+    chargeDays,
+    recoveryDays,
+    ratio: Number(ratio.toFixed(2)),
+  };
+}
+
+function computeAnaerobicPercentage(heartRateArray, userMaxHr) {
+  if (!heartRateArray || heartRateArray.length === 0) return null;
+
+  let zone4 = 0;
+  let zone5 = 0;
+  const total = heartRateArray.length;
+
+  for (const hr of heartRateArray) {
+    const percent = (hr / userMaxHr) * 100;
+    if (percent >= 90) zone5++;
+    else if (percent >= 80) zone4++;
+  }
+
+  const anaerobicTime = zone4 + zone5;
+  return Number(((anaerobicTime / total) * 100).toFixed(1));
+}
+
+async function advancedMetrics(
+  activities,
+  timeline,
+  accessToken,
+  userMaxHr = 200
+) {
+  console.log("\n=== 📈 Analyse approfondie ===");
+
+  // Ratio charge/récup
+  for (const d of [7, 14]) {
+    const ratio = computeChargeRecovery(timeline, d);
+    console.log(
+      `🔄 Sur ${d} jours : ${ratio.chargeDays} jours de charge, ${ratio.recoveryDays} de récup (ratio = ${ratio.ratio})`
+    );
+  }
+
+  // Anaérobie (analyse 3 dernières activités avec HR)
+  const hrSamples = [];
+  let collected = 0;
+
+  for (let i = 0; i <= activities.length - 1 && collected < 3; i++) {
+    const act = activities[i];
+    if (!act.has_heartrate) continue;
+
+    const stream = await getHeartRateStream(act.id, accessToken);
+    if (stream) {
+      const percent = computeAnaerobicPercentage(stream, userMaxHr);
+      if (percent != null) {
+        console.log(`🔥 ${act.name} : ${percent}% en zone anaérobie`);
+        hrSamples.push(percent);
+        collected++;
+      }
+    }
+  }
+
+  if (hrSamples.length > 0) {
+    const avg = hrSamples.reduce((a, b) => a + b, 0) / hrSamples.length;
+    console.log(`📊 Moyenne anaérobie (3 sorties) : ${avg.toFixed(1)}%`);
+  } else {
+    console.log("❌ Pas assez de données cardiaques disponibles.");
+  }
+}
+
+async function withCache(cachePath, fetchFn, forceRefresh = false) {
+  try {
+    if (forceRefresh) throw new Error("Force refresh");
+
+    // 1. Check si le fichier existe
+    const data = await fs.readFile(cachePath, "utf-8");
+    return JSON.parse(data);
+  } catch (e) {
+    // 2. Si le fichier n'existe pas, on appelle l'API
+    const result = await fetchFn();
+    if (!result) throw new Error("Fetch failed, no result to cache");
+
+    // 3. On l’enregistre
+    await fs.writeFile(cachePath, JSON.stringify(result, null, 2), "utf-8");
+    return result;
+  }
+}
+
 // === 6. Main ===
+// 👇 Main
 (async () => {
-  console.log("📥 Récupération des activités Strava...");
-  const activities = await fetchActivities();
+  const args = process.argv.slice(2);
+  const shouldRefresh = args.includes("--refresh");
+  const tokens = await withCache(
+    "cache/tokens.json",
+    async () => {
+      return await getAccessToken();
+    },
+    shouldRefresh
+  );
+
+  const accessToken = tokens["access_token"];
+
+  console.log("📥 Récupération des activités Strava (avec cache)...");
+  const activities = await withCache(
+    "cache/activities.json",
+    async () => {
+      return await fetchActivities(accessToken);
+    },
+    shouldRefresh
+  );
 
   console.log(`📊 ${activities.length} activités récupérées.`);
 
@@ -196,4 +327,6 @@ function computeLoadTimeline(tssMap) {
   console.table(timeline.slice(-10));
 
   analyzeTimeline(timeline);
+
+  await advancedMetrics(activities, timeline, accessToken);
 })();
