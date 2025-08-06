@@ -2,6 +2,7 @@ import dayjs from "dayjs";
 import dotenv from "dotenv";
 import fs from "fs/promises";
 import fetch from "node-fetch";
+import readline from "readline";
 
 dotenv.config();
 
@@ -49,11 +50,11 @@ async function getAccessToken() {
 // === 2. Estimation TSS ===
 function estimateTSS(durationMin, hrAvg) {
   const hrMax = 190;
-  const IF = hrAvg ? hrAvg / hrMax : 0.7; // intensité approx
+  const IF = hrAvg ? hrAvg / hrMax : 0.7;
   return durationMin * IF * IF;
 }
 
-// === 3. Load activities from Strava ===
+// === 3. Load activities ===
 async function fetchActivities() {
   const accessToken = await getAccessToken();
   const activities = [];
@@ -81,11 +82,28 @@ async function fetchActivities() {
   return activities;
 }
 
-// === 4. Build daily TSS map ===
-function buildTSSByDay(activities) {
+// === 4. Filter by chosen sport ===
+function filterActivitiesBySport(activities, sportChoice) {
+  if (sportChoice === "Bike") {
+    return activities.filter(
+      (act) => act.type === "Ride" || act.type === "EBikeRide"
+    );
+  }
+
+  if (sportChoice === "Foot") {
+    return activities.filter((act) =>
+      ["Run", "Hike", "TrailRun"].includes(act.type)
+    );
+  }
+
+  return [];
+}
+
+// === 5. Build TSS map ===
+function buildTSSByDay(filteredActivities) {
   const map = {};
 
-  for (const act of activities) {
+  for (const act of filteredActivities) {
     const date = act.start_date_local.split("T")[0];
     const durationMin = act.elapsed_time / 60;
     const tss = estimateTSS(durationMin, act.average_heartrate);
@@ -96,64 +114,7 @@ function buildTSSByDay(activities) {
   return map;
 }
 
-// === Analyse auto : CTL, TSB, recommandations ===
-function analyzeTimeline(timeline) {
-  const lastDay = timeline[timeline.length - 1];
-  const tsb = lastDay.tsb;
-  const ctlNow = lastDay.ctl;
-
-  const ctl14 = timeline.slice(-14);
-  const ctlStart = ctl14[0].ctl;
-  const ctlEnd = ctl14[ctl14.length - 1].ctl;
-  const ctlDelta = ctlEnd - ctlStart;
-
-  let status = "";
-  let suggestion = "";
-  let recovery = "";
-
-  // Analyse TSB (fraîcheur)
-  if (tsb > 10) {
-    status += "🟢 Tu es très frais (TSB > +10)\n";
-    suggestion += "➕ Augmente l’intensité ou prévois une compétition.\n";
-  } else if (tsb > 5) {
-    status += "✅ Tu es dans la zone optimale (TSB entre +5 et +10)\n";
-    suggestion += "🎯 Parfait pour performer !\n";
-  } else if (tsb > -5) {
-    status += "🟡 Tu es en pleine charge (TSB entre -5 et +5)\n";
-    suggestion += "✅ Continue à ce rythme, sans excès.\n";
-  } else if (tsb > -10) {
-    status += "🟠 Fatigue modérée (TSB entre -10 et -5)\n";
-    suggestion += "⚠️ Surveille ton état, envisage un jour léger ou repos.\n";
-  } else {
-    status += "🔴 Risque de surentraînement (TSB < -10)\n";
-    suggestion += "🛑 Programme au moins 1 à 2 jours de récupération.\n";
-    recovery = "💤 Repos recommandé !\n";
-  }
-
-  // Analyse CTL (charge)
-  if (ctlDelta > 5) {
-    status +=
-      "📈 CTL en forte progression (+" + ctlDelta.toFixed(1) + " en 14j)\n";
-  } else if (ctlDelta > 1) {
-    status += "↗️ CTL en légère hausse (+" + ctlDelta.toFixed(1) + " en 14j)\n";
-  } else if (ctlDelta > -1) {
-    status += "➡️ CTL stable (~" + ctlNow.toFixed(1) + ")\n";
-  } else {
-    status += "📉 CTL en baisse (" + ctlDelta.toFixed(1) + " en 14j)\n";
-    suggestion += "⚠️ Attention à ne pas trop relâcher l'effort.\n";
-  }
-
-  console.log("\n=== 🧠 Analyse de forme ===");
-  console.log(status);
-  console.log("=== 💡 Conseils ===");
-  console.log(suggestion);
-  if (recovery) {
-    console.log("=== 💤 Récupération recommandée ===");
-    console.log(recovery);
-  }
-}
-
-// === 5. Build full timeline + CTL/ATL/TSB ===
+// === 6. Compute CTL / ATL / TSB ===
 function computeLoadTimeline(tssMap) {
   const days = 180;
   const today = dayjs().startOf("day");
@@ -182,18 +143,35 @@ function computeLoadTimeline(tssMap) {
   return timeline;
 }
 
-// === 6. Main ===
+// === 7. User prompt ===
+async function askSportChoice() {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question("Choisis un sport à analyser (Bike ou Foot) : ", (answer) => {
+      rl.close();
+      const choice = answer.trim().toLowerCase();
+      if (choice === "bike") resolve("Bike");
+      else resolve("Foot");
+    });
+  });
+}
+
+// === 8. Main ===
 (async () => {
-  console.log("📥 Récupération des activités Strava...");
+  const sportChoice = await askSportChoice();
+  console.log(`🚴‍ Analyser les activités : ${sportChoice}`);
+
   const activities = await fetchActivities();
+  const filtered = filterActivitiesBySport(activities, sportChoice);
 
-  console.log(`📊 ${activities.length} activités récupérées.`);
+  console.log(`📊 ${filtered.length} activités "${sportChoice}" récupérées.`);
 
-  const tssMap = buildTSSByDay(activities);
+  const tssMap = buildTSSByDay(filtered);
   const timeline = computeLoadTimeline(tssMap);
 
-  // Affiche les 10 derniers jours
   console.table(timeline.slice(-10));
-
-  analyzeTimeline(timeline);
 })();
