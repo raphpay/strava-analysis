@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/raphpay/strava-analysis#readme",
   "dependencies": {
+    "date-fns": "^4.1.0",
     "dayjs": "^1.11.13",
     "dotenv": "^17.2.1",
     "node-fetch": "^3.3.2",
