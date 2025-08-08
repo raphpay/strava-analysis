@@ -1,50 +1,13 @@
 import dayjs from "dayjs";
 import dotenv from "dotenv";
-import fs from "fs/promises";
 import fetch from "node-fetch";
+import withCache from "./cache/withCache";
 
 dotenv.config();
 
-const TOKENS_FILE = "./tokens.json";
+const TOKENS_FILE = "./cache/tokens.json";
 const CLIENT_ID = process.env.STRAVA_CLIENT_ID;
 const CLIENT_SECRET = process.env.STRAVA_CLIENT_SECRET;
-
-// === 1. Token handling ===
-async function loadTokens() {
-  return JSON.parse(await fs.readFile(TOKENS_FILE, "utf-8"));
-}
-
-async function saveTokens(tokens) {
-  await fs.writeFile(TOKENS_FILE, JSON.stringify(tokens, null, 2));
-}
-
-async function refreshAccessToken(refreshToken) {
-  const res = await fetch("https://www.strava.com/api/v3/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-  });
-
-  const data = await res.json();
-  await saveTokens(data);
-  return data.access_token;
-}
-
-async function getAccessToken() {
-  const tokens = await loadTokens();
-  const now = Math.floor(Date.now() / 1000);
-
-  if (now >= tokens.expires_at) {
-    return await refreshAccessToken(tokens.refresh_token);
-  }
-
-  return tokens.access_token;
-}
 
 // === 2. Estimation TSS ===
 function estimateTSS(durationMin, hrAvg) {
@@ -85,7 +48,8 @@ function buildTSSByDay(activities) {
   const map = {};
 
   for (const act of activities) {
-    const date = act.start_date_local.split("T")[0];
+    // const date = act.start_date_local.split("T")[0];
+    const date = act.date.split("T")[0];
     const durationMin = act.elapsed_time / 60;
     const tss = estimateTSS(durationMin, act.average_heartrate);
 
@@ -273,24 +237,6 @@ async function advancedMetrics(
     console.log(`📊 Moyenne anaérobie (3 sorties) : ${avg.toFixed(1)}%`);
   } else {
     console.log("❌ Pas assez de données cardiaques disponibles.");
-  }
-}
-
-async function withCache(cachePath, fetchFn, forceRefresh = false) {
-  try {
-    if (forceRefresh) throw new Error("Force refresh");
-
-    // 1. Check si le fichier existe
-    const data = await fs.readFile(cachePath, "utf-8");
-    return JSON.parse(data);
-  } catch (e) {
-    // 2. Si le fichier n'existe pas, on appelle l'API
-    const result = await fetchFn();
-    if (!result) throw new Error("Fetch failed, no result to cache");
-
-    // 3. On l’enregistre
-    await fs.writeFile(cachePath, JSON.stringify(result, null, 2), "utf-8");
-    return result;
   }
 }
 

@@ -104,7 +104,7 @@ function buildTSSByDay(filteredActivities) {
   const map = {};
 
   for (const act of filteredActivities) {
-    const date = act.start_date_local.split("T")[0];
+    const date = act.date.split("T")[0];
     const durationMin = act.elapsed_time / 60;
     const tss = estimateTSS(durationMin, act.average_heartrate);
 

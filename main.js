@@ -1,125 +1,47 @@
-const axios = require("axios");
-const dayjs = require("dayjs");
-const stravaV3 = require("strava-v3");
-require("dotenv").config();
+import dotenv from "dotenv";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+import { checkActivities } from "./activities/checkActivities.js";
+import advancedMetrics from "./analysis/advancedMetrics.js";
+import { analyseActivities } from "./analysis/analyseActivities.js";
+import { checkAuth } from "./auth/checkAuth.js";
+import { computeMetrics } from "./training/computeMetrics.js";
+import { generatePlan } from "./training/generatePlan.js";
 
-// 🔐 Remplace avec tes infos Strava API
-const CLIENT_ID = process.env.STRAVA_CLIENT_ID;
-const CLIENT_SECRET = process.env.STRAVA_CLIENT_SECRET;
-const ACCESS_TOKEN = process.env.STRAVA_ACCESS_TOKEN;
-const REFRESH_TOKEN = process.env.STRAVA_REFRESH_TOKEN;
-const PERSONAL_ID = process.env.STRAVA_RP_ID;
-const AUTH_CODE = process.env.STRAVA_AUTH_CODE;
+dotenv.config();
 
-async function getAccessToken() {
-  const response = await axios.post(
-    "https://www.strava.com/api/v3/oauth/token",
-    null,
-    {
-      params: {
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        grant_type: "refresh_token",
-        refresh_token: REFRESH_TOKEN,
-      },
-    }
-  );
-  return response.data.access_token;
-}
-
-async function getActivities(token, beforeDate) {
-  const perPage = 200;
-  const allActivities = [];
-
-  let page = 1;
-  let fetchMore = true;
-
-  while (fetchMore) {
-    const res = await axios.get(
-      "https://www.strava.com/api/v3/athlete/activities",
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        params: {
-          per_page: perPage,
-          page,
-          before: beforeDate,
-        },
-      }
-    );
-
-    const activities = res.data;
-    allActivities.push(...activities);
-    if (activities.length < perPage) fetchMore = false;
-    else page++;
-  }
-
-  return allActivities;
-}
-
-// TSS estimation (approximative)
-function estimateTSS(durationMin, hrAvg, sportType) {
-  if (!hrAvg || !durationMin) return 0;
-  const intensityFactor = hrAvg / 190; // 190 comme HRmax approximative
-  const tss = durationMin * intensityFactor * intensityFactor;
-  return sportType === "Run" ? tss * 1.1 : tss; // un peu plus haut pour course
-}
-
-async function verification() {
-  // const config = {
-  //   access_token: ACCESS_TOKEN,
-  //   client_id: CLIENT_ID,
-  //   client_secret: CLIENT_SECRET,
-  //   redirect_uri: "test",
-  // };
-
-  // stravaV3.athletes.get({ id: PERSONAL_ID }, (err, payload, limits) => {
-  //   console.log("res", err, payload, limits);
-  // });
-
-  const config = {
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
-    code: AUTH_CODE,
-    grant_type: "authorization_code",
-  };
-
-  console.log("config", config);
-
-  // const result = await axios.post(
-  //   "https://www.strava.com/oauth/token",
-  //   null,
-  //   config
-  // );
-  // console.log("res", result);
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const GOAL_FILE = path.join(__dirname, "./cache/goal.json");
 
 (async () => {
-  const test = await verification();
-  // const accessToken = await getAccessToken();
+  console.log("🚀 Lancement du coach Strava...");
 
-  // const beforeDate = Math.floor(Date.now() / 1000); // now
-  // const activities = await getActivities(accessToken, beforeDate);
-  // console.log("env", activities);
+  // 1️⃣ Authentification
+  const tokens = await checkAuth();
+  const accessToken = tokens.access_token;
 
-  // const trainingData = activities
-  //   .filter((a) => ["Ride", "Run", "Hike"].includes(a.type)) // Garde les activités utiles
-  //   .map((a) => {
-  //     const durationMin = a.elapsed_time / 60;
-  //     const tss = estimateTSS(durationMin, a.average_heartrate, a.type);
+  // 2️⃣ Récupération des activités (avec cache)
+  console.log("📥 Récupération des activités...");
+  const activities = await checkActivities(accessToken);
+  console.log(`📊 ${activities.length} activités récupérées.`);
 
-  //     return {
-  //       date: a.start_date_local.slice(0, 10),
-  //       name: a.name,
-  //       type: a.type,
-  //       durationMin,
-  //       distanceKm: a.distance / 1000,
-  //       elevationGain: a.total_elevation_gain,
-  //       avgHR: a.average_heartrate,
-  //       tss: Math.round(tss),
-  //     };
-  //   });
+  // 3️⃣ Analyse brute
+  const timeline = await analyseActivities(activities, accessToken);
 
-  // console.table(trainingData);
+  // 4️⃣ Calcul des métriques d'entraînement
+  const analysis = await advancedMetrics(activities, timeline, accessToken);
+  const metrics = computeMetrics(analysis);
 
-  // ➕ Prochaine étape : calcul CTL/ATL/TSB à partir de ce tableau
+  // 4️⃣ Lecture de l’objectif
+  const goal = JSON.parse(await fs.readFile(GOAL_FILE, "utf-8"));
+
+  // 5️⃣ Génération du plan
+  const plan = generatePlan(metrics, goal);
+
+  console.log("📅 Plan d'entraînement :");
+  for (const weekPlan of plan) {
+    console.log("Plan semaine:", weekPlan);
+  }
 })();

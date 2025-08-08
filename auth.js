@@ -1,5 +1,4 @@
 import dotenv from "dotenv";
-import fs from "fs/promises";
 import http from "http";
 import fetch from "node-fetch";
 import open from "open";
@@ -12,14 +11,14 @@ const REDIRECT_URI = "http://localhost:3000/callback";
 
 async function saveTokensToFile(tokens) {
   try {
-    await fs.writeFile("tokens.json", JSON.stringify(tokens, null, 2));
+    await fs.writeFile("cache/tokens.json", JSON.stringify(tokens, null, 2));
     console.log("💾 Tokens enregistrés dans tokens.json !");
   } catch (err) {
     console.error("❌ Erreur d'écriture du fichier tokens.json :", err);
   }
 }
 
-function startAuthFlow() {
+export function startAuthFlow() {
   const authUrl = `https://www.strava.com/oauth/authorize?client_id=${CLIENT_ID}&response_type=code&redirect_uri=${REDIRECT_URI}&approval_prompt=force&scope=read,activity:read_all`;
 
   console.log("➡️  Ouverture de l'URL d'auth Strava...");
