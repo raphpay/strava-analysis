@@ -1,3 +1,5 @@
+import { computeIntensity } from "./computeIntensity.js";
+
 async function getHeartRateStream(activityId, accessToken) {
   const res = await fetch(
     `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=heartrate&key_by_type=true`,
@@ -69,19 +71,38 @@ export default async function advancedMetrics(
     },
   };
 
-  // --- Calcul volume hebdo ---
-  const totalDistance = activities.reduce(
-    (sum, a) => sum + (a.distance || 0),
+  // --- Calcul volume hebdo sur les 4 dernières semaines ---
+  const fourWeeksAgo = new Date();
+  fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
+
+  const recentActivities = activities.filter((a) => {
+    const actDate = new Date(a.date);
+    return actDate >= fourWeeksAgo;
+  });
+
+  // Somme des distances en km
+  const totalDistance4Weeks = recentActivities.reduce(
+    (sum, a) => sum + Number(a.distanceKm || 0),
     0
-  ); // en mètres
-  const weeks = Math.max(1, timeline.length / 7);
-  results.volumeWeekly = (totalDistance / weeks / 1000).toFixed(1); // en km
+  );
+
+  // Moyenne hebdo
+  results.volumeWeekly = (totalDistance4Weeks / 4).toFixed(1);
+
+  console.log(
+    `📏 Volume moyen sur 4 dernières semaines : ${results.volumeWeekly} km/semaine`
+  );
 
   // --- Intensité moyenne ---
   const intensities = activities.map((a) => a.suffer_score || 0);
   results.intensityAvg = (
     intensities.reduce((a, b) => a + b, 0) / intensities.length
   ).toFixed(1);
+
+  const intensitySummary = computeIntensity(activities, {
+    userMaxHr: 190, // adapte si tu veux
+    ftp: process.env.USER_FTP ? Number(process.env.USER_FTP) : null,
+  });
 
   // --- Ratio charge/récup ---
   for (const d of [7, 14]) {
@@ -122,7 +143,17 @@ export default async function advancedMetrics(
     results.zone45Percent = Number((totalZone45Time / collected).toFixed(1));
   }
 
-  console.log("res", results);
+  console.log(
+    `Sur 7 jours : Jours de charge: ${results.chargeRecovery[0].chargeDays}, jours de récup: ${results.chargeRecovery[0].recoveryDays}. Ratio: ${results.chargeRecovery[0].ratio}`
+  );
+
+  console.log(
+    `Sur 14 jours : Jours de charge: ${results.chargeRecovery[1].chargeDays}, jours de récup: ${results.chargeRecovery[1].recoveryDays}. Ratio: ${results.chargeRecovery[1].ratio}`
+  );
+
+  console.log(
+    `Pourcentage de temps passé dans les zones cardiaque 4-5: ${results.zone45Percent}`
+  );
 
   return results;
 }

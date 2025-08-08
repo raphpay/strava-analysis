@@ -31,6 +31,8 @@ export default async function fetchActivities(accessToken) {
     distanceKm: (act.distance / 1000).toFixed(1),
     elevationGain: act.total_elevation_gain,
     avgHR: act.average_heartrate,
+    movingTime: act.moving_time,
+    elapsedTime: act.elapsed_time,
   }));
 
   await fs.writeFile(
